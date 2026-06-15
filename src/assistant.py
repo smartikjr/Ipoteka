@@ -160,6 +160,14 @@ def retrieve(query: str) -> tuple[str | None, float]:
     return KNOWLEDGE[idx]["a"], float(sims[idx])
 
 
+def retrieve_top(query: str, k: int = 3) -> list[tuple[str, float]]:
+    vec, matrix = _kb_index()
+    qv = vec.transform([query.lower()])
+    sims = (matrix @ qv.T).toarray().ravel()
+    order = sims.argsort()[::-1][:k]
+    return [(KNOWLEDGE[i]["a"], float(sims[i])) for i in order]
+
+
 # --------------------------------------------------------------------------- #
 # Калькулятор аннуитетного платежа
 # --------------------------------------------------------------------------- #
@@ -230,21 +238,46 @@ def parse_payment_query(text: str) -> dict | None:
 # LLM-режим (опционально, OpenAI-совместимый API)
 # --------------------------------------------------------------------------- #
 SYSTEM_PROMPT = (
-    "Ты — вежливый ИИ-консультант по ипотечному кредитованию в российском банке. "
-    "Отвечай кратко, по-русски, простым языком. Тема — ипотека: программы, ставки, "
-    "ПДН, LTV, первоначальный взнос, скоринг, оценка недвижимости. Если вопрос не по "
-    "теме ипотеки — мягко верни разговор к ипотеке."
+    "Ты — ИИ-консультант по ипотечному кредитованию в российском банке, часть "
+    "клиентского интерфейса ипотечной ИИ-платформы (как «Домклик»). Помогай вежливо "
+    "и по делу. Отвечай по-русски, кратко (2–5 предложений), простым языком, при "
+    "необходимости списком; используй markdown. Темы: ипотечные программы (рыночная, "
+    "семейная, IT, льготные), ставки, ПДН, LTV, первоначальный взнос, документы, "
+    "скоринг, оценка недвижимости (AVM), досрочное погашение, налоговый вычет. "
+    "Если есть «Справочная информация» — опирайся на неё. Не выдумывай точные ставки "
+    "и условия конкретного банка; при неуверенности предложи уточнить у банка. "
+    "Если вопрос не про ипотеку — мягко верни разговор к теме."
 )
 
 
-def llm_answer(query: str, history: list[dict], cfg: dict) -> str | None:
-    """Запрос к OpenAI-совместимому API. При любой ошибке возвращает None."""
+def _llm_context(query: str, last_app: dict | None) -> str:
+    """Контекст для LLM: релевантные фрагменты базы знаний + статус заявки."""
+    parts = []
+    snippets = [a for a, s in retrieve_top(query, 3) if s > 0.05]
+    if snippets:
+        parts.append("Справочная информация по теме:\n" + "\n".join(f"- {s}" for s in snippets))
+    if last_app:
+        from . import scoring
+
+        res = scoring.predict_one(last_app)
+        verdict = "одобрено" if res["approved"] else "отказано"
+        parts.append(
+            f"Контекст пользователя: есть рассчитанная заявка — решение «{verdict}», "
+            f"вероятность дефолта {res['pd']:.1%}, балл {res['score']}/1000."
+        )
+    return "\n\n".join(parts)
+
+
+def llm_answer(query: str, history: list[dict], cfg: dict, context: str = "") -> str | None:
+    """Запрос к OpenAI-совместимому API (OpenAI, Groq и т.п.). При ошибке возвращает None."""
     try:
         import requests
 
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        system = SYSTEM_PROMPT + (f"\n\n{context}" if context else "")
+        messages = [{"role": "system", "content": system}]
         for h in history[-6:]:
-            messages.append({"role": h["role"], "content": h["content"]})
+            if h["role"] in ("user", "assistant"):
+                messages.append({"role": h["role"], "content": h["content"]})
         messages.append({"role": "user", "content": query})
 
         resp = requests.post(
@@ -252,7 +285,7 @@ def llm_answer(query: str, history: list[dict], cfg: dict) -> str | None:
             headers={"Authorization": f"Bearer {cfg['api_key']}",
                      "Content-Type": "application/json"},
             json={"model": cfg.get("model", "gpt-4o-mini"), "messages": messages,
-                  "temperature": 0.3, "max_tokens": 400},
+                  "temperature": 0.3, "max_tokens": 500},
             timeout=30,
         )
         resp.raise_for_status()
@@ -315,16 +348,18 @@ def answer(query: str, history: list[dict] | None = None,
                         "модель CatBoost → LightGBM вернёт стоимость с погрешностью ≈ 4–5%.",
                 "source": "rule"}
 
-    # 5. База знаний
+    # 5. Свободный вопрос: если подключён LLM — отвечает он (с опорой на базу знаний)
+    if llm_cfg:
+        llm = llm_answer(query, history, llm_cfg, context=_llm_context(t, last_app))
+        if llm:
+            return {"text": llm, "source": "llm"}
+
+    # 6. База знаний
     kb_text, score = retrieve(t)
     if score >= RETRIEVE_THRESHOLD:
         return {"text": kb_text, "source": "kb"}
 
-    # 6. LLM (если настроен) либо вежливый фолбэк
-    if llm_cfg:
-        llm = llm_answer(query, history, llm_cfg)
-        if llm:
-            return {"text": llm, "source": "llm"}
+    # 7. Вежливый фолбэк
     return {"text": "Не уверен, что понял вопрос. Я консультирую по ипотеке: "
                     "программы, ставки, ПДН, LTV, первоначальный взнос, документы, "
                     "расчёт платежа, оценка заявки и недвижимости. Попробуйте "

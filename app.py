@@ -56,12 +56,68 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-      .block-container {padding-top: 2.2rem; padding-bottom: 2rem;}
-      h1, h2, h3 {color: #15281C;}
-      .stMetric {background: #F2F6F3; border-radius: 12px; padding: 12px 14px;}
-      div[data-testid="stMetricValue"] {font-size: 1.6rem;}
-      .pill {display:inline-block;padding:3px 10px;border-radius:12px;
-             font-size:0.78rem;font-weight:600;color:#fff;}
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+      html, body, [data-testid="stAppViewContainer"], [class*="css"] {
+          font-family: 'Inter', -apple-system, Segoe UI, sans-serif;
+      }
+      .stApp { background: #F4F7F5; }
+      [data-testid="stHeader"] { background: transparent; }
+      #MainMenu, footer, [data-testid="stStatusWidget"] { visibility: hidden; }
+      .block-container { padding-top: 1.4rem; padding-bottom: 2rem; max-width: 1180px; }
+      h1, h2, h3 { color: #15281C; letter-spacing: -0.01em; }
+
+      /* Боковая панель */
+      [data-testid="stSidebar"] {
+          background: #FFFFFF; border-right: 1px solid #E6ECE8;
+      }
+      [data-testid="stSidebar"] [role="radiogroup"] { gap: 3px; }
+      [data-testid="stSidebar"] [role="radiogroup"] label {
+          padding: 7px 12px; border-radius: 10px; transition: background .15s; cursor: pointer;
+      }
+      [data-testid="stSidebar"] [role="radiogroup"] label:hover { background: #EAF5EE; }
+      [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) { background: #EAF5EE; }
+      [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p { color: #0E7A2A !important; font-weight: 600; }
+
+      /* Карточки (bordered-контейнеры) */
+      [data-testid="stVerticalBlockBorderWrapper"] {
+          background: #fff; border-radius: 14px; border: 1px solid #E6ECE8 !important;
+          box-shadow: 0 2px 12px rgba(20,40,28,0.05);
+      }
+
+      /* Метрики */
+      [data-testid="stMetric"] {
+          background: #fff; border: 1px solid #E6ECE8; border-radius: 12px;
+          padding: 12px 16px; box-shadow: 0 1px 6px rgba(20,40,28,0.04);
+      }
+      [data-testid="stMetricValue"] { font-size: 1.5rem; color: #15281C; }
+      [data-testid="stMetricLabel"] { color: #5C6B62; }
+
+      /* Кнопки */
+      .stButton > button {
+          border-radius: 10px; border: 1px solid #CBE5D4; color: #15281C;
+          font-weight: 500; transition: all .15s;
+      }
+      .stButton > button:hover { border-color: #21A038; color: #0E7A2A; background: #F1F9F3; }
+      .stButton > button[kind="primary"], .stDownloadButton > button {
+          background: linear-gradient(110deg, #21A038, #16863A); color: #fff; border: none;
+      }
+      .stDownloadButton > button:hover { filter: brightness(1.05); color:#fff; }
+
+      /* Чат */
+      [data-testid="stChatInput"] textarea { border-radius: 12px; }
+
+      /* Hero-баннер */
+      .hero {
+          background: linear-gradient(115deg, #21A038 0%, #0E7A2A 100%);
+          border-radius: 16px; padding: 22px 28px; margin-bottom: 16px;
+          box-shadow: 0 8px 24px rgba(33,160,56,0.22);
+      }
+      .hero h1 { color: #fff; margin: 0; font-size: 1.6rem; font-weight: 700; }
+      .hero p { color: #E9F8EF; margin: 7px 0 0; font-size: 0.97rem; line-height: 1.4; }
+
+      .pill { display:inline-block; padding:3px 11px; border-radius:12px;
+              font-size:0.78rem; font-weight:600; color:#fff; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -77,6 +133,12 @@ def fmt_rub(x: float) -> str:
 
 def pill(text: str, color: str) -> str:
     return f'<span class="pill" style="background:{color}">{text}</span>'
+
+
+def hero(title: str, subtitle: str = "") -> None:
+    """Градиентная шапка страницы."""
+    sub = f"<p>{subtitle}</p>" if subtitle else ""
+    st.markdown(f'<div class="hero"><h1>{title}</h1>{sub}</div>', unsafe_allow_html=True)
 
 
 @st.cache_resource
@@ -140,13 +202,11 @@ with st.sidebar:
 # СТРАНИЦА: ОБЗОР
 # =========================================================================== #
 def page_overview():
-    st.title("🏦 мини-Домклик — ИИ в ипотечном кредитовании")
-    st.markdown(
-        "Интерактивный прототип к ВКР *«Возможности и риски использования ИИ "
-        "в ипотечном кредитовании в российских коммерческих банках "
-        "(на примере ПАО Сбербанк)»*. Прототип в действии показывает четыре "
-        "технологических узла ипотечного ИИ-конвейера и реализует рекомендации "
-        "третьей главы работы."
+    hero(
+        "🏦 мини-Домклик — ИИ в ипотечном кредитовании",
+        "Интерактивный прототип к ВКР «Возможности и риски использования ИИ в ипотечном "
+        "кредитовании в российских коммерческих банках (на примере ПАО Сбербанк)». "
+        "Четыре узла ипотечного ИИ-конвейера и рекомендации третьей главы — в действии.",
     )
 
     f = C.THESIS_FACTS
@@ -203,10 +263,10 @@ def page_overview():
 # СТРАНИЦА: СКОРИНГ + SHAP
 # =========================================================================== #
 def page_scoring():
-    st.title("📝 Кредитный скоринг заёмщика и объяснение решения")
-    st.caption(
+    hero(
+        "📝 Кредитный скоринг заёмщика и объяснение решения",
         "Модель оценивает вероятность дефолта (PD) и принимает решение. "
-        "Защищённые признаки (пол) в модель не подаются."
+        "Защищённые признаки (пол) в модель не подаются.",
     )
 
     presets = {
@@ -378,10 +438,10 @@ def page_scoring():
 # СТРАНИЦА: AVM
 # =========================================================================== #
 def page_avm():
-    st.title("🏢 Автоматическая оценка недвижимости (AVM)")
-    st.caption(
+    hero(
+        "🏢 Автоматическая оценка недвижимости (AVM)",
         "Двухступенчатая модель CatBoost → LightGBM, как у сервиса «Домклик» "
-        f"(раздел 2.2 ВКР). Средняя погрешность ≈ {avm_meta()['metrics']['mape_final']:.1%}."
+        f"(раздел 2.2 ВКР). Средняя погрешность ≈ {avm_meta()['metrics']['mape_final']:.1%}.",
     )
 
     d = avm.default_property()
@@ -446,10 +506,10 @@ def page_avm():
 # СТРАНИЦА: СПРАВЕДЛИВОСТЬ
 # =========================================================================== #
 def page_fairness():
-    st.title("⚖️ Тестирование моделей на справедливость (fairness)")
-    st.caption(
+    hero(
+        "⚖️ Тестирование моделей на справедливость (fairness)",
         "Проверка отсутствия алгоритмической предвзятости по защищённым признакам. "
-        "Реализация Рекомендации 2 и принципов Кодекса этики Банка России."
+        "Реализация Рекомендации 2 и принципов Кодекса этики Банка России.",
     )
 
     attr_map = {"Пол": "gender", "Возрастная группа": "age_group", "Регион": "region"}
@@ -498,10 +558,10 @@ def page_fairness():
 # СТРАНИЦА: МОНИТОРИНГ
 # =========================================================================== #
 def page_monitoring():
-    st.title("📊 Мониторинг моделей (Model Operations Center)")
-    st.caption(
+    hero(
+        "📊 Мониторинг моделей (Model Operations Center)",
         "Контроль стабильности модели при изменении макросреды. "
-        "Сценарий «шок 2024–2025»: рост ключевой ставки и ухудшение платёжеспособности."
+        "Сценарий «шок 2024–2025»: рост ключевой ставки и ухудшение платёжеспособности.",
     )
 
     r = monitoring.monitoring_report()
@@ -554,8 +614,10 @@ def page_monitoring():
 # СТРАНИЦА: КАРТА РИСКОВ
 # =========================================================================== #
 def page_risk_map():
-    st.title("🗺️ Карта рисков применения ИИ в ипотечном кредитовании")
-    st.caption("Соответствует Таблице 5 и Рисунку 4 ВКР. Оси — вероятность и влияние (1–5).")
+    hero(
+        "🗺️ Карта рисков применения ИИ в ипотечном кредитовании",
+        "Соответствует Таблице 5 и Рисунку 4 ВКР. Оси — вероятность и влияние (1–5).",
+    )
 
     df = risk_map.risk_frame()
     fig = px.scatter(
@@ -582,8 +644,10 @@ def page_risk_map():
 # СТРАНИЦА: ЭФФЕКТЫ
 # =========================================================================== #
 def page_effects():
-    st.title("📈 Эффекты внедрения ИИ в ипотечное кредитование")
-    st.caption("Сопоставление «до / после» по данным раздела 3.1 ВКР (Таблица 4, Рисунок 3).")
+    hero(
+        "📈 Эффекты внедрения ИИ в ипотечное кредитование",
+        "Сопоставление «до / после» по данным раздела 3.1 ВКР (Таблица 4, Рисунок 3).",
+    )
 
     f = C.THESIS_FACTS
     bars = [
@@ -651,13 +715,22 @@ def _payment_chart(r: dict):
 
 
 def page_assistant():
-    st.title("🤖 ИИ-консультант по ипотеке")
     llm_cfg = _llm_cfg()
-    mode = "подключена языковая модель (LLM)" if llm_cfg else "встроенный режим (без ключа)"
-    st.caption(
-        f"Клиентский ИИ-интерфейс — 4-й технологический узел из раздела 2.2 ВКР "
-        f"(концепт GigaChat в «Домклик»). Текущий режим: {mode}."
+    hero(
+        "🤖 ИИ-консультант по ипотеке",
+        "Клиентский ИИ-интерфейс — 4-й технологический узел из раздела 2.2 ВКР "
+        "(концепт GigaChat в «Домклик»).",
     )
+    if llm_cfg:
+        st.markdown(
+            pill("🟢 Подключена языковая модель (LLM)", GREEN)
+            + f" &nbsp; <span style='color:#5C6B62'>модель: {llm_cfg.get('model', '—')}</span>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(pill("⚪ Встроенный режим (без ключа)", GREY)
+                    + " &nbsp; <span style='color:#5C6B62'>для полноценного диалога "
+                    "добавьте ключ LLM в настройках</span>", unsafe_allow_html=True)
 
     if "chat" not in st.session_state:
         st.session_state.chat = [{
