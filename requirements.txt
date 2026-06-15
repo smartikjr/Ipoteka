@@ -10,3 +10,4 @@ shap>=0.44
 plotly>=5.18
 matplotlib>=3.7
 kaleido==0.2.1
+reportlab>=4.0
