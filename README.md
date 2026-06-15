@@ -59,17 +59,21 @@ streamlit run app.py
 можно подключить к **языковой модели (LLM)** — тогда свободные вопросы пойдут к ней
 (с опорой на базу знаний), а при сбое будет автоматический возврат во встроенный режим.
 
-Самый простой бесплатный вариант — **Groq**. Добавьте в настройки приложения
-(на Streamlit Cloud: *Manage app → Settings → Secrets*):
+Поддерживаются два варианта (ключ добавляется в *Manage app → Settings → Secrets*):
 
+**🇷🇺 GigaChat (Сбербанк)** — бесплатно для физлиц, работает из России, по теме ВКР:
+```toml
+GIGACHAT_CREDENTIALS = "ваши-авторизационные-данные"
+```
+📘 Инструкция: [`docs/НАСТРОЙКА_ИИ_GigaChat.md`](docs/НАСТРОЙКА_ИИ_GigaChat.md)
+
+**🌐 Groq / OpenAI** (если доступен из вашей страны), любой OpenAI-совместимый API:
 ```toml
 LLM_API_KEY = "gsk_ваш-ключ"
 LLM_BASE_URL = "https://api.groq.com/openai/v1"
 LLM_MODEL = "llama-3.3-70b-versatile"
 ```
-
-📘 Пошаговая инструкция: [`docs/НАСТРОЙКА_ИИ_Groq.md`](docs/НАСТРОЙКА_ИИ_Groq.md).
-Поле `LLM_BASE_URL` принимает любой OpenAI-совместимый API (OpenAI, Groq и т.п.).
+📘 Инструкция: [`docs/НАСТРОЙКА_ИИ_Groq.md`](docs/НАСТРОЙКА_ИИ_Groq.md)
 
 ---
 

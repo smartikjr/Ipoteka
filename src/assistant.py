@@ -268,28 +268,89 @@ def _llm_context(query: str, last_app: dict | None) -> str:
     return "\n\n".join(parts)
 
 
+_GC_TOKEN: tuple[str, float] | None = None
+
+
+def _build_messages(query: str, history: list[dict], context: str) -> list[dict]:
+    system = SYSTEM_PROMPT + (f"\n\n{context}" if context else "")
+    messages = [{"role": "system", "content": system}]
+    for h in history[-6:]:
+        if h["role"] in ("user", "assistant"):
+            messages.append({"role": h["role"], "content": h["content"]})
+    messages.append({"role": "user", "content": query})
+    return messages
+
+
+def _openai_chat(messages: list[dict], cfg: dict) -> str:
+    """OpenAI-совместимый API (OpenAI, Groq и т.п.)."""
+    import requests
+
+    resp = requests.post(
+        f"{cfg['base_url'].rstrip('/')}/chat/completions",
+        headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
+        json={"model": cfg.get("model", "gpt-4o-mini"), "messages": messages,
+              "temperature": 0.3, "max_tokens": 500},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"].strip()
+
+
+def _gigachat_token(cfg: dict) -> str:
+    """OAuth-токен GigaChat (кэшируется ~30 минут)."""
+    global _GC_TOKEN
+    import time
+    import uuid
+
+    import requests
+    import urllib3
+
+    urllib3.disable_warnings()
+    now = time.time()
+    if _GC_TOKEN and _GC_TOKEN[1] - 60 > now:
+        return _GC_TOKEN[0]
+    resp = requests.post(
+        "https://ngw.devices.sberbank.ru:9443/api/v2/oauth",
+        headers={"Authorization": f"Basic {cfg['credentials']}",
+                 "RqUID": str(uuid.uuid4()),
+                 "Content-Type": "application/x-www-form-urlencoded"},
+        data={"scope": cfg.get("scope", "GIGACHAT_API_PERS")},
+        timeout=20, verify=False,  # GigaChat использует российский корневой сертификат
+    )
+    resp.raise_for_status()
+    j = resp.json()
+    exp = j.get("expires_at", int((now + 1800) * 1000)) / 1000
+    _GC_TOKEN = (j["access_token"], exp)
+    return _GC_TOKEN[0]
+
+
+def _gigachat_chat(messages: list[dict], cfg: dict) -> str:
+    """API GigaChat (Сбербанк)."""
+    import requests
+    import urllib3
+
+    urllib3.disable_warnings()
+    token = _gigachat_token(cfg)
+    resp = requests.post(
+        "https://gigachat.devices.sberbank.ru/api/v1/chat/completions",
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"model": cfg.get("model", "GigaChat"), "messages": messages, "temperature": 0.3},
+        timeout=30, verify=False,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"].strip()
+
+
 def llm_answer(query: str, history: list[dict], cfg: dict, context: str = "") -> str | None:
-    """Запрос к OpenAI-совместимому API (OpenAI, Groq и т.п.). При ошибке возвращает None."""
+    """Ответ языковой модели. Поддерживает OpenAI-совместимые API и GigaChat.
+
+    При любой ошибке возвращает None (вызывающий код переходит во встроенный режим).
+    """
     try:
-        import requests
-
-        system = SYSTEM_PROMPT + (f"\n\n{context}" if context else "")
-        messages = [{"role": "system", "content": system}]
-        for h in history[-6:]:
-            if h["role"] in ("user", "assistant"):
-                messages.append({"role": h["role"], "content": h["content"]})
-        messages.append({"role": "user", "content": query})
-
-        resp = requests.post(
-            f"{cfg['base_url'].rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {cfg['api_key']}",
-                     "Content-Type": "application/json"},
-            json={"model": cfg.get("model", "gpt-4o-mini"), "messages": messages,
-                  "temperature": 0.3, "max_tokens": 500},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        messages = _build_messages(query, history, context)
+        if cfg.get("provider") == "gigachat":
+            return _gigachat_chat(messages, cfg)
+        return _openai_chat(messages, cfg)
     except Exception:
         return None
 

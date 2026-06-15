@@ -691,11 +691,19 @@ def page_effects():
 # СТРАНИЦА: ИИ-КОНСУЛЬТАНТ
 # =========================================================================== #
 def _llm_cfg():
-    """Конфигурация LLM из Streamlit Secrets (если задана)."""
+    """Конфигурация LLM из Streamlit Secrets (GigaChat или OpenAI-совместимый API)."""
     try:
         s = st.secrets
+        if "GIGACHAT_CREDENTIALS" in s:
+            return {
+                "provider": "gigachat",
+                "credentials": s["GIGACHAT_CREDENTIALS"],
+                "scope": s.get("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
+                "model": s.get("LLM_MODEL", "GigaChat"),
+            }
         if "LLM_API_KEY" in s:
             return {
+                "provider": "openai",
                 "api_key": s["LLM_API_KEY"],
                 "base_url": s.get("LLM_BASE_URL", "https://api.openai.com/v1"),
                 "model": s.get("LLM_MODEL", "gpt-4o-mini"),
