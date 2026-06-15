@@ -23,7 +23,18 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from src import avm, bootstrap, config as C, explain, fairness, monitoring, risk_map, scoring
+from src import (
+    assistant,
+    avm,
+    bootstrap,
+    config as C,
+    counterfactual,
+    explain,
+    fairness,
+    monitoring,
+    risk_map,
+    scoring,
+)
 
 # --------------------------------------------------------------------------- #
 # Оформление
@@ -97,6 +108,7 @@ _warmup()
 PAGES = [
     "🏠 Обзор",
     "📝 Скоринг и объяснение (SHAP)",
+    "🤖 ИИ-консультант",
     "🏢 Оценка недвижимости (AVM)",
     "⚖️ Справедливость моделей",
     "📊 Мониторинг моделей (MOC)",
@@ -260,6 +272,9 @@ def page_scoring():
 
     if submitted or True:  # показываем результат сразу для выбранного пресета
         res = scoring.predict_one(values)
+        # Сохраняем заявку для ИИ-консультанта (раздел «оцени мою заявку»)
+        st.session_state["last_app"] = values
+        st.session_state["last_result"] = res
         st.divider()
         left, right = st.columns([1, 1.3])
         with left:
@@ -321,6 +336,20 @@ def page_scoring():
             reasons = explain.top_reasons(values)
             st.error("**Основные причины отказа** (для заёмщика, ст. 16 ФЗ № 152-ФЗ):\n\n"
                      + "\n".join(f"- {r}" for r in reasons))
+            cf = counterfactual.suggest(values)
+            st.markdown("#### 💡 Как получить одобрение")
+            if cf:
+                st.caption("Контрфактический анализ: минимальные изменения, при которых "
+                           "модель одобрит заявку.")
+                for s in cf:
+                    st.markdown(
+                        f"- **{s['label']}** — {s['action']} → вероятность дефолта снизится "
+                        f"до **{s['new_pd']:.1%}** ✅"
+                    )
+            else:
+                st.caption("Одиночных изменений недостаточно — рассмотрите комбинацию мер: "
+                           "увеличить первоначальный взнос, снизить сумму кредита и закрыть "
+                           "действующие кредиты.")
         else:
             st.success("Заявка соответствует требованиям модели. "
                        "Объяснение факторов доступно выше (право заёмщика на пояснение).")
@@ -581,16 +610,113 @@ def page_effects():
     st.caption("Источник: составлено по данным ВКР (Таблица 4).")
 
 
+# =========================================================================== #
+# СТРАНИЦА: ИИ-КОНСУЛЬТАНТ
+# =========================================================================== #
+def _llm_cfg():
+    """Конфигурация LLM из Streamlit Secrets (если задана)."""
+    try:
+        s = st.secrets
+        if "LLM_API_KEY" in s:
+            return {
+                "api_key": s["LLM_API_KEY"],
+                "base_url": s.get("LLM_BASE_URL", "https://api.openai.com/v1"),
+                "model": s.get("LLM_MODEL", "gpt-4o-mini"),
+            }
+    except Exception:
+        pass
+    return None
+
+
+def _payment_chart(r: dict):
+    yb = r["yearly_balance"]
+    fig = go.Figure(go.Scatter(x=list(range(len(yb))), y=yb, fill="tozeroy",
+                               line=dict(color=GREEN)))
+    fig.update_layout(height=220, margin=dict(l=10, r=10, t=10, b=10),
+                      xaxis_title="Год", yaxis_title="Остаток долга, ₽")
+    st.plotly_chart(fig, width="stretch")
+
+
+def page_assistant():
+    st.title("🤖 ИИ-консультант по ипотеке")
+    llm_cfg = _llm_cfg()
+    mode = "подключена языковая модель (LLM)" if llm_cfg else "встроенный режим (без ключа)"
+    st.caption(
+        f"Клиентский ИИ-интерфейс — 4-й технологический узел из раздела 2.2 ВКР "
+        f"(концепт GigaChat в «Домклик»). Текущий режим: {mode}."
+    )
+
+    if "chat" not in st.session_state:
+        st.session_state.chat = [{
+            "role": "assistant",
+            "content": "Здравствуйте! Я — ИИ-консультант по ипотеке. Спросите про "
+                       "программы, ПДН, LTV, документы; попросите рассчитать платёж или "
+                       "оценить вашу заявку. Напишите «что ты умеешь» — покажу возможности.",
+        }]
+
+    quick = [
+        "Что такое ПДН?",
+        "Какие программы ипотеки?",
+        "Рассчитай платёж 5 млн под 17% на 25 лет",
+        "Оцени мою заявку",
+    ]
+    cols = st.columns(len(quick))
+    pending = None
+    for i, q in enumerate(quick):
+        if cols[i].button(q, key=f"quick_{i}", width="stretch"):
+            pending = q
+
+    for m in st.session_state.chat:
+        with st.chat_message(m["role"], avatar="🧑" if m["role"] == "user" else "🤖"):
+            st.markdown(m["content"])
+
+    msg = st.chat_input("Спросите про ипотеку…") or pending
+    if msg:
+        st.session_state.chat.append({"role": "user", "content": msg})
+        with st.chat_message("user", avatar="🧑"):
+            st.markdown(msg)
+        res = assistant.answer(msg, history=st.session_state.chat,
+                               last_app=st.session_state.get("last_app"), llm_cfg=llm_cfg)
+        with st.chat_message("assistant", avatar="🤖"):
+            st.markdown(res["text"])
+            if res.get("payment"):
+                _payment_chart(res["payment"])
+        st.session_state.chat.append({"role": "assistant", "content": res["text"]})
+
+    st.divider()
+    with st.expander("🧮 Калькулятор ипотечного платежа"):
+        c1, c2, c3 = st.columns(3)
+        principal = c1.number_input("Сумма кредита, ₽", 300_000, 60_000_000,
+                                    5_000_000, step=100_000, key="calc_p")
+        rate = c2.number_input("Ставка, % годовых", 1.0, 40.0, 17.0, step=0.5, key="calc_r")
+        years = c3.number_input("Срок, лет", 1, 30, 20, key="calc_y")
+        r = assistant.mortgage_payment(principal, rate, int(years))
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Ежемесячный платёж", fmt_rub(r["payment"]))
+        m2.metric("Переплата", fmt_rub(r["overpay"]), f"{r['overpay_pct']:.0%}",
+                  delta_color="inverse")
+        m3.metric("Всего выплат", fmt_rub(r["total"]))
+        _payment_chart(r)
+
+    st.info(
+        "🔎 **Связь с ВКР.** Консультант демонстрирует клиентский ИИ-узел ипотечного "
+        "конвейера (концепт GigaChat). Он интегрирован с реальными моделями прототипа: "
+        "может оценить заявку (скоринг), объяснить отказ (SHAP) и рассчитать платёж. "
+        "При добавлении ключа LLM в настройках превращается в полноценный диалог."
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Роутинг
 # --------------------------------------------------------------------------- #
 ROUTES = {
     PAGES[0]: page_overview,
     PAGES[1]: page_scoring,
-    PAGES[2]: page_avm,
-    PAGES[3]: page_fairness,
-    PAGES[4]: page_monitoring,
-    PAGES[5]: page_risk_map,
-    PAGES[6]: page_effects,
+    PAGES[2]: page_assistant,
+    PAGES[3]: page_avm,
+    PAGES[4]: page_fairness,
+    PAGES[5]: page_monitoring,
+    PAGES[6]: page_risk_map,
+    PAGES[7]: page_effects,
 }
 ROUTES[page]()
