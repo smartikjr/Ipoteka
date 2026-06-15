@@ -202,6 +202,61 @@ def fig_avm_accuracy():
     save(fig, "08_avm_accuracy.png", w=720, h=620)
 
 
+def fig_vintage():
+    from src import portfolio as P
+    v = P.vintage_default_curve()
+    peak = int(v.loc[v["Маржинальная PD"].idxmax(), "Месяц"])
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=v["Месяц"], y=v["Маржинальная PD"], name="Маржинальная PD (мес.)",
+                         marker_color="#9FD8B4"))
+    fig.add_trace(go.Scatter(x=v["Месяц"], y=v["Накопленная дефолтность"], name="Накопленная",
+                             yaxis="y2", line=dict(color=GREEN, width=3)))
+    fig.add_vline(x=peak, line_dash="dot", line_color=RED)
+    fig.update_layout(
+        title=f"Кривая дефолтов ипотечного портфеля: «горб» на {peak}-м месяце",
+        xaxis_title="Месяцев с момента выдачи",
+        yaxis=dict(title="Маржинальная PD", tickformat=".1%"),
+        yaxis2=dict(title="Накопленная дефолтность", overlaying="y", side="right",
+                    tickformat=".0%"),
+        legend=BOTTOM_LEGEND)
+    save(fig, "09_vintage.png", margin=dict(l=60, r=60, t=70, b=80))
+
+
+def fig_stress():
+    from src import portfolio as P
+    r = P.stress_test(8, 20, 30)
+    base, stress = r["base"], r["stress"]
+    labels = ["Средний PD, %", "EL к портфелю, %", "Доля риска, %"]
+    bv = [base["mean_pd"] * 100, base["el_pct"] * 100, base["npl_share"] * 100]
+    sv = [stress["mean_pd"] * 100, stress["el_pct"] * 100, stress["npl_share"] * 100]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="Базовый сценарий", x=labels, y=bv, marker_color=GREY,
+                         text=[f"{x:.2f}" for x in bv], textposition="outside"))
+    fig.add_trace(go.Bar(name="Кризис: +8 п.п. / −20% / −30%", x=labels, y=sv, marker_color=RED,
+                         text=[f"{x:.2f}" for x in sv], textposition="outside"))
+    fig.update_layout(
+        title=f"Стресс-тест портфеля: EL {base['el_total']/1e9:.2f} → "
+              f"{stress['el_total']/1e9:.2f} млрд ₽",
+        barmode="group", yaxis_title="%", legend=BOTTOM_LEGEND)
+    save(fig, "10_stress.png", margin=dict(l=60, r=30, t=70, b=80))
+
+
+def fig_map():
+    from src import geo
+    df = geo.cities_frame()
+    fig = go.Figure(go.Scattergeo(
+        lon=df["lon"], lat=df["lat"], text=df["Город"],
+        marker=dict(size=df["Объём"] / 2.4 + 7, color=df["Цена_м2"], colorscale="YlGn",
+                    showscale=True, colorbar=dict(title="₽/м²"),
+                    line=dict(width=0.6, color="#fff"))))
+    fig.update_geos(showland=True, landcolor="#EAF0EC", showcountries=True,
+                    countrycolor="#CBD5CE", showcoastlines=False,
+                    bgcolor="rgba(0,0,0,0)", fitbounds="locations", resolution=50)
+    fig.update_layout(title="Карта цен на недвижимость по городам России",
+                      margin=dict(l=0, r=0, t=60, b=0))
+    save(fig, "11_map.png", h=620)
+
+
 def main():
     print("Генерация графиков в docs/figures/ ...")
     fig_shap()
@@ -212,6 +267,12 @@ def main():
     fig_effects()
     fig_roc()
     fig_avm_accuracy()
+    fig_vintage()
+    fig_stress()
+    try:
+        fig_map()
+    except Exception as e:
+        print(f"  ! карта не сгенерирована ({e})")
     print("Готово.")
 
 

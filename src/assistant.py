@@ -235,6 +235,96 @@ def parse_payment_query(text: str) -> dict | None:
 
 
 # --------------------------------------------------------------------------- #
+# Агентные инструменты: извлечение параметров и вызов моделей
+# --------------------------------------------------------------------------- #
+REGION_KEYWORDS = {
+    "москв": "Москва и МО", "подмоск": "Москва и МО", "мо ": "Москва и МО",
+    "петербург": "Санкт-Петербург и ЛО", "спб": "Санкт-Петербург и ЛО",
+    "питер": "Санкт-Петербург и ЛО",
+    "краснодар": "Краснодарский край", "сочи": "Краснодарский край",
+    "екатеринбург": "Свердловская область", "свердлов": "Свердловская область",
+}
+
+
+def parse_property(text: str) -> dict | None:
+    """Извлечь характеристики объекта для оценки AVM (нужна хотя бы площадь)."""
+    t = text.lower()
+    m = re.search(r"(\d+[.,]?\d*)\s*(?:м2|м²|кв\.?\s*м|квадрат|метр)", t)
+    if not m:
+        return None
+    area = float(m.group(1).replace(",", "."))
+    region = next((v for k, v in REGION_KEYWORDS.items() if k in t), "Прочие регионы")
+    rooms = 2
+    rm = re.search(r"(\d+)\s*-?\s*комн", t)
+    if rm:
+        rooms = int(rm.group(1))
+    elif "однокомн" in t or "студи" in t:
+        rooms = 1
+    elif "двухкомн" in t:
+        rooms = 2
+    elif "трёхкомн" in t or "трехкомн" in t:
+        rooms = 3
+    return {"area": max(area, 20.0), "rooms": rooms, "region": region}
+
+
+def parse_application(text: str) -> dict:
+    """Извлечь параметры заявки из свободного текста. Возвращает только найденные поля."""
+    t = text.lower()
+    out: dict = {}
+    m = re.search(r"доход\D{0,6}(\d[\d\s.,]*)\s*(млн|миллион\w*|тыс\w*|к|т\.?р)?", t)
+    if m:
+        out["income"] = _to_number(m.group(1), m.group(2) or "")
+    m = re.search(r"(?:пдн|долгов\w*\s*нагрузк\w*)\D{0,6}(\d+)", t)
+    if m:
+        out["pdn"] = float(m.group(1))
+    m = re.search(r"взнос\D{0,6}(\d+)", t)
+    if m:
+        out["down_payment_pct"] = float(m.group(1))
+    m = re.search(r"(?:балл\w*|кредитн\w*\s*истор\w*|скоринг\w*)\D{0,6}(\d{3})", t)
+    if m:
+        out["credit_score"] = int(m.group(1))
+    m = re.search(r"(?:стоимост\w*|квартир\w*|недвижим\w*|объект\w*)\D{0,8}(\d[\d\s.,]*)\s*(млн|тыс)?", t)
+    if m and _to_number(m.group(1), m.group(2) or "") >= 500_000:
+        out["property_value"] = _to_number(m.group(1), m.group(2) or "")
+    return out
+
+
+def avm_estimate(prop: dict) -> str:
+    from . import avm
+
+    obj = dict(avm.default_property(), **prop)
+    res = avm.predict_one(obj)
+    return (
+        f"Оценка объекта {obj['rooms']}-комн., {obj['area']:g} м², «{obj['region']}»:\n\n"
+        f"- **{res['price_final']:,.0f} ₽** ({res['price_per_m2']:,.0f} ₽/м²)\n"
+        f"- диапазон: {res['low']:,.0f} – {res['high']:,.0f} ₽ (±{res['mape']:.0%})\n\n"
+        "_Оценка двухступенчатой моделью AVM (CatBoost → LightGBM)._"
+    ).replace(",", " ")
+
+
+def score_application(parsed: dict) -> str:
+    from . import explain, scoring
+
+    values = dict(scoring.default_application())
+    values.update({k: v for k, v in parsed.items() if k != "property_value"})
+    if "down_payment_pct" in parsed:
+        values["ltv"] = 100 - parsed["down_payment_pct"]
+    if "property_value" in parsed:
+        dp = values["down_payment_pct"]
+        values["loan_amount"] = parsed["property_value"] * (1 - dp / 100)
+        values["ltv"] = 100 - dp
+    res = scoring.predict_one(values)
+    if res["approved"]:
+        return (f"По указанным параметрам — **предварительное одобрение** "
+                f"(вероятность дефолта {res['pd']:.1%}, балл {res['score']}/1000).")
+    reasons = explain.top_reasons(values, k=3)
+    return (f"По указанным параметрам — скорее **отказ** "
+            f"(вероятность дефолта {res['pd']:.1%}). Основные факторы риска:\n"
+            + "\n".join(f"- {r}" for r in reasons)
+            + "\n\nПопробуйте увеличить взнос или снизить долговую нагрузку.")
+
+
+# --------------------------------------------------------------------------- #
 # LLM-режим (опционально, OpenAI-совместимый API)
 # --------------------------------------------------------------------------- #
 SYSTEM_PROMPT = (
@@ -396,18 +486,25 @@ def answer(query: str, history: list[dict] | None = None,
                         "**6 млн** под **18%** на **20 лет**». Или используйте калькулятор ниже.",
                 "source": "rule"}
 
-    # 3. Намерение: оценить заявку / почему отказ
-    if any(w in t for w in ("одобр", "почему отказ", "моя заявка", "оцени заявк",
-                            "шанс", "пройду ли", "дадут ли")):
-        return {"text": _assess_last_app(last_app), "source": "model"}
-
-    # 4. Намерение: оценка недвижимости
+    # 3. Намерение: оценка недвижимости (агентный вызов AVM при наличии площади)
     if any(w in t for w in ("оцени квартир", "сколько стоит", "оценка недвиж",
-                            "стоимость квартир", "оцени недвиж")):
-        return {"text": "Оценю объект автоматической моделью AVM. Перейдите в раздел "
-                        "**«Оценка недвижимости (AVM)»** слева и введите параметры квартиры — "
-                        "модель CatBoost → LightGBM вернёт стоимость с погрешностью ≈ 4–5%.",
+                            "стоимость квартир", "оцени недвиж", "оцени объект",
+                            "оцени жиль")):
+        prop = parse_property(t)
+        if prop:
+            return {"text": avm_estimate(prop), "source": "model"}
+        return {"text": "Укажите хотя бы площадь и город, например: «оцени квартиру "
+                        "60 м² в Москве» — я рассчитаю моделью AVM. Можно также открыть "
+                        "раздел **«Оценка недвижимости (AVM)»**.",
                 "source": "rule"}
+
+    # 4. Намерение: оценить заявку (агентный вызов скоринга)
+    if any(w in t for w in ("одобр", "почему отказ", "моя заявка", "оцени заявк",
+                            "шанс", "пройду ли", "дадут ли", "дам ли")):
+        parsed = parse_application(t)
+        if parsed:
+            return {"text": score_application(parsed), "source": "model"}
+        return {"text": _assess_last_app(last_app), "source": "model"}
 
     # 5. Свободный вопрос: если подключён LLM — отвечает он (с опорой на базу знаний)
     if llm_cfg:

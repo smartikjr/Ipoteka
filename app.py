@@ -31,7 +31,9 @@ from src import (
     counterfactual,
     explain,
     fairness,
+    geo,
     monitoring,
+    portfolio,
     report,
     risk_map,
     scoring,
@@ -173,9 +175,12 @@ PAGES = [
     "📝 Скоринг и объяснение (SHAP)",
     "🤖 ИИ-консультант",
     "🏢 Оценка недвижимости (AVM)",
+    "🗺️ Карта недвижимости",
+    "📊 Аналитика портфеля",
+    "🌪️ Стресс-тест портфеля",
     "⚖️ Справедливость моделей",
-    "📊 Мониторинг моделей (MOC)",
-    "🗺️ Карта рисков",
+    "📉 Мониторинг моделей (MOC)",
+    "⚠️ Карта рисков",
     "📈 Эффекты внедрения ИИ",
 ]
 
@@ -559,7 +564,7 @@ def page_fairness():
 # =========================================================================== #
 def page_monitoring():
     hero(
-        "📊 Мониторинг моделей (Model Operations Center)",
+        "📉 Мониторинг моделей (Model Operations Center)",
         "Контроль стабильности модели при изменении макросреды. "
         "Сценарий «шок 2024–2025»: рост ключевой ставки и ухудшение платёжеспособности.",
     )
@@ -615,7 +620,7 @@ def page_monitoring():
 # =========================================================================== #
 def page_risk_map():
     hero(
-        "🗺️ Карта рисков применения ИИ в ипотечном кредитовании",
+        "⚠️ Карта рисков применения ИИ в ипотечном кредитовании",
         "Соответствует Таблице 5 и Рисунку 4 ВКР. Оси — вероятность и влияние (1–5).",
     )
 
@@ -800,6 +805,152 @@ def page_assistant():
     )
 
 
+# =========================================================================== #
+# СТРАНИЦА: КАРТА НЕДВИЖИМОСТИ
+# =========================================================================== #
+def page_map():
+    hero("🗺️ Карта недвижимости России",
+         "Уровень цен по городам и AVM-оценка одной и той же квартиры по стране.")
+    df = geo.cities_frame()
+
+    fig = go.Figure(go.Scattergeo(
+        lon=df["lon"], lat=df["lat"], text=df["Город"],
+        marker=dict(size=df["Объём"] / 2.4 + 7, color=df["Цена_м2"], colorscale="YlGn",
+                    showscale=True, colorbar=dict(title="₽/м²"),
+                    line=dict(width=0.6, color="#fff")),
+        hovertemplate="<b>%{text}</b><br>%{marker.color:,.0f} ₽/м²<extra></extra>",
+    ))
+    fig.update_geos(showland=True, landcolor="#EAF0EC", showcountries=True,
+                    countrycolor="#CBD5CE", showcoastlines=False,
+                    bgcolor="rgba(0,0,0,0)", fitbounds="locations", resolution=50)
+    fig.update_layout(height=460, margin=dict(l=0, r=0, t=10, b=0))
+    st.plotly_chart(fig, width="stretch")
+
+    st.subheader("AVM-оценка квартиры по городам")
+    c1, c2, c3 = st.columns(3)
+    area = c1.slider("Площадь, м²", 25, 120, 55)
+    rooms = c2.selectbox("Комнат", [1, 2, 3, 4], index=1)
+    material = c3.selectbox("Материал стен", C.WALL_MATERIALS, index=2)
+
+    rows = []
+    for _, r in df.iterrows():
+        obj = dict(avm.default_property(), area=float(area), rooms=int(rooms),
+                   region=r["Регион"], wall_material=material)
+        base_price = avm.predict_one(obj)["price_final"]
+        factor = r["Цена_м2"] / C.REGION_PRICE_PER_M2[r["Регион"]]
+        rows.append((r["Город"], base_price * factor))
+    bar = pd.DataFrame(rows, columns=["Город", "Оценка"]).sort_values("Оценка", ascending=False)
+    figb = go.Figure(go.Bar(x=bar["Город"], y=bar["Оценка"], marker_color=GREEN,
+                            text=[f"{p/1e6:.1f}" for p in bar["Оценка"]], textposition="outside"))
+    figb.update_layout(height=360, yaxis_title="AVM-оценка, ₽",
+                       margin=dict(l=10, r=10, t=10, b=10))
+    st.plotly_chart(figb, width="stretch")
+    st.info("🔎 **Связь с ВКР.** Геоструктура рынка и AVM-оценка залога по регионам "
+            "(узел оценки недвижимости, раздел 2.2). Цифры на столбцах — млн ₽.")
+
+
+# =========================================================================== #
+# СТРАНИЦА: АНАЛИТИКА ПОРТФЕЛЯ
+# =========================================================================== #
+def page_portfolio():
+    hero("📊 Аналитика ипотечного портфеля",
+         "Структура портфеля и кривая дефолтов — узел прогноза поведения портфеля "
+         "(раздел 2.1 ВКР).")
+    b = portfolio.booked_loans()
+    s = portfolio.summary(b)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Кредитов в портфеле", f"{s['n']:,}".replace(",", " "))
+    c2.metric("Объём портфеля", f"{s['ead_total']/1e9:.1f} млрд ₽")
+    c3.metric("Средний PD", f"{s['mean_pd']:.2%}")
+    c4.metric("Ожидаемые потери (EL)", f"{s['el_total']/1e9:.2f} млрд ₽", f"{s['el_pct']:.2%}",
+              delta_color="off")
+
+    st.subheader("Структура портфеля")
+    pick = st.radio("Разрез", ["Программа", "Регион", "Возраст"], horizontal=True)
+    col = {"Программа": "program", "Регион": "region", "Возраст": "age_group"}[pick]
+    t = portfolio.structure(col)
+    fig = px.pie(t, names="Категория", values="Объём", hole=0.5,
+                 color_discrete_sequence=px.colors.sequential.Greens_r)
+    fig.update_traces(textinfo="percent+label")
+    fig.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10),
+                      legend=dict(orientation="h", y=-0.1))
+    st.plotly_chart(fig, width="stretch")
+
+    st.subheader("Кривая дефолтов («горб» на 24–36 мес.)")
+    v = portfolio.vintage_default_curve()
+    fig2 = go.Figure()
+    fig2.add_trace(go.Bar(x=v["Месяц"], y=v["Маржинальная PD"], name="Маржинальная PD (мес.)",
+                          marker_color="#9FD8B4"))
+    fig2.add_trace(go.Scatter(x=v["Месяц"], y=v["Накопленная дефолтность"], name="Накопленная",
+                              yaxis="y2", line=dict(color=GREEN, width=3)))
+    peak = int(v.loc[v["Маржинальная PD"].idxmax(), "Месяц"])
+    fig2.add_vline(x=peak, line_dash="dot", line_color=RED)
+    fig2.update_layout(
+        height=380, margin=dict(l=10, r=10, t=20, b=10),
+        xaxis_title="Месяцев с момента выдачи",
+        yaxis=dict(title="Маржинальная PD", tickformat=".1%"),
+        yaxis2=dict(title="Накопленная дефолтность", overlaying="y", side="right",
+                    tickformat=".0%"),
+        legend=dict(orientation="h", y=1.12),
+    )
+    st.plotly_chart(fig2, width="stretch")
+    st.info(f"🔎 **Связь с ВКР.** Вероятность дефолта по ипотеке достигает максимума на "
+            f"**{peak}-м месяце** — «горб дефолтов» из раздела 2.1. Точность прогноза "
+            "портфеля напрямую влияет на резервы (МСФО 9) и финансовый результат банка.")
+
+
+# =========================================================================== #
+# СТРАНИЦА: СТРЕСС-ТЕСТ ПОРТФЕЛЯ
+# =========================================================================== #
+@st.cache_data(show_spinner=False)
+def _stress(rate: float, income: float, price: float) -> dict:
+    return portfolio.stress_test(rate, income, price)
+
+
+def page_stress():
+    hero("🌪️ Стресс-тест ипотечного портфеля",
+         "Влияние макрошока на ожидаемые потери портфеля: EL = PD × LGD × EAD (МСФО 9).")
+    st.caption("Двигайте ползунки сценария — потери пересчитываются моделью онлайн. "
+               "Примеры: умеренный шок (+3 пп / −10% / −15%), кризис (+8 пп / −20% / −30%).")
+
+    c1, c2, c3 = st.columns(3)
+    rate = c1.slider("Рост ключевой ставки, п.п.", 0.0, 15.0, 5.0, 0.5)
+    income = c2.slider("Падение реальных доходов, %", 0, 30, 10)
+    price = c3.slider("Падение цен на жильё, %", 0, 40, 15)
+
+    r = _stress(rate, income, price)
+    base, stress = r["base"], r["stress"]
+
+    el_add_txt = f"Дополнительные ожидаемые потери: +{r['el_add']/1e9:.2f} млрд ₽"
+    st.markdown(f"#### {pill(el_add_txt, RED)}", unsafe_allow_html=True)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Средний PD", f"{stress['mean_pd']:.2%}",
+              f"+{r['pd_delta']*100:.2f} п.п.", delta_color="inverse")
+    m2.metric("Ожидаемые потери (EL)", f"{stress['el_total']/1e9:.2f} млрд ₽",
+              f"было {base['el_total']/1e9:.2f}", delta_color="off")
+    m3.metric("EL к портфелю", f"{stress['el_pct']:.2%}",
+              f"+{(stress['el_pct']-base['el_pct'])*100:.2f} п.п.", delta_color="inverse")
+    m4.metric("Средний LGD", f"{stress['lgd_mean']:.1%}",
+              f"+{(stress['lgd_mean']-base['lgd_mean'])*100:.1f} п.п.", delta_color="inverse")
+
+    labels = ["Средний PD, %", "EL к портфелю, %", "Доля риска (PD>порог), %"]
+    base_v = [base["mean_pd"]*100, base["el_pct"]*100, base["npl_share"]*100]
+    stress_v = [stress["mean_pd"]*100, stress["el_pct"]*100, stress["npl_share"]*100]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="Базовый сценарий", x=labels, y=base_v, marker_color=GREY,
+                         text=[f"{x:.2f}" for x in base_v], textposition="outside"))
+    fig.add_trace(go.Bar(name="Стресс-сценарий", x=labels, y=stress_v, marker_color=RED,
+                         text=[f"{x:.2f}" for x in stress_v], textposition="outside"))
+    fig.update_layout(barmode="group", height=380, legend=dict(orientation="h", y=1.12),
+                      margin=dict(l=10, r=10, t=30, b=10))
+    st.plotly_chart(fig, width="stretch")
+    st.info("🔎 **Связь с ВКР.** Стресс-тестирование портфеля — ключевой инструмент "
+            "управления модельным и кредитным риском (раздел 3.2, Рекомендации 1 и 4). "
+            "Падение цен на жильё повышает LGD (хуже обеспечение), рост ставки и падение "
+            "доходов повышают PD — потери растут нелинейно.")
+
+
 # --------------------------------------------------------------------------- #
 # Роутинг
 # --------------------------------------------------------------------------- #
@@ -808,9 +959,12 @@ ROUTES = {
     PAGES[1]: page_scoring,
     PAGES[2]: page_assistant,
     PAGES[3]: page_avm,
-    PAGES[4]: page_fairness,
-    PAGES[5]: page_monitoring,
-    PAGES[6]: page_risk_map,
-    PAGES[7]: page_effects,
+    PAGES[4]: page_map,
+    PAGES[5]: page_portfolio,
+    PAGES[6]: page_stress,
+    PAGES[7]: page_fairness,
+    PAGES[8]: page_monitoring,
+    PAGES[9]: page_risk_map,
+    PAGES[10]: page_effects,
 }
 ROUTES[page]()
